@@ -1,0 +1,111 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Causal experiment configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Data paths ────────────────────────────────────────────────────────────────
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  panel_path: data/processed/panel.parquet
+  a_sub_path: data/processed/A_sub.npz
+  a_comp_path: data/processed/A_comp.npz
+  embeddings_path: data/processed/embeddings.npy
+  pid_idx_path: data/processed/pid_idx.npy
+
+# ── Treatment definition ─────────────────────────────────────────────────────
+treatment:
+  primary: promo_any          # binary: display=1 OR mailer=1
+  continuous: discount_rate   # follow-up: |RETAIL_DISC| / gross
+  components:
+    - display
+    - mailer
+
+# ── Outcome definition ───────────────────────────────────────────────────────
+outcome:
+  primary: units_sold         # count
+  secondary: sold_any         # binary
+
+# ── Covariates ────────────────────────────────────────────────────────────────
+covariates:
+  categorical:
+    - DEPARTMENT
+    - COMMODITY_DESC
+    - SUB_COMMODITY_DESC
+    - BRAND
+  panel_keys:
+    - STORE_ID
+    - PRODUCT_ID
+    - WEEK_NO
+  use_embeddings: true        # append Node2Vec 64-dim as product-level features
+  embedding_dim: 64
+
+# ── Temporal split ────────────────────────────────────────────────────────────
+split:
+  train_weeks: [1, 70]        # inclusive
+  val_weeks: [71, 85]
+  test_weeks: [86, 102]
+
+# ── Causal estimands ─────────────────────────────────────────────────────────
+estimands:
+  direct_ate:
+    description: "E[Y(T=1) − Y(T=0)] — effect of own promotion on demand"
+  substitute_spillover_ate:
+    description: "E[Y(T=0, e_sub=high) − Y(T=0, e_sub=low)] — cannibalization"
+    expected_sign: negative
+  complement_spillover_ate:
+    description: "E[Y(T=0, e_comp=high) − Y(T=0, e_comp=low)] — attachment lift"
+    expected_sign: positive
+
+# ── Exposure mapping ─────────────────────────────────────────────────────────
+exposure:
+  weight_types:
+    - binary                  # unweighted: Σ T_j / |N(i)|
+    - edge_weight             # weighted: Σ w_ij T_j / Σ w_ij
+  neighbourhood_depth: 1      # 1-hop (2-hop as robustness test)
+
+# ── Double ML ────────────────────────────────────────────────────────────────
+dml:
+  n_folds: 5                  # cross-fitting folds
+  model_y: LGBMRegressor      # nuisance model for E[Y|X]
+  model_t: LGBMClassifier     # nuisance model for E[T|X]
+  confidence_level: 0.95
+  log_transform: true         # log(1+Y) to handle zero-inflated counts
+  min_demand_filter: 0.01     # drop structural-zero products (never sell); log(1+Y) handles sparsity
+  include_discount_rate: false  # estimate total promo_any effect by default
+
+# ── Baselines ────────────────────────────────────────────────────────────────
+baselines:
+  - name: ols_no_graph
+    description: "Naive OLS: units_sold ~ promo_any + confounders"
+  - name: causal_forest_no_graph
+    description: "CausalForestDML, no graph features, heterogeneous TE"
+  - name: dml_no_graph
+    description: "LinearDML, no graph features"
+  - name: dml_unweighted_spillover
+    description: "LinearDML + 6 pre-computed unweighted spillover features"
+
+# ── Semi-synthetic DGP ───────────────────────────────────────────────────────
+synthetic:
+  true_direct_effect: 0.10    # β₁ in log(1+Y) scale ≈ 10.5% unit lift
+  true_sub_spillover: -0.05   # β₂ in log(1+Y) scale ≈ 4.9% cannibalization
+  true_comp_spillover: 0.03   # β₃ in log(1+Y) scale ≈ 3.0% attachment lift
+  noise_std: 0.5              # σ in log(1+Y) scale
+  confounding_strength: 0.5   # correlation between X and T assignment
+  baseline_demand: 1.5        # β₀ in log(1+Y) → median Y ≈ 3.5 units
+  n_simulations: 50           # number of DGP draws for CI coverage
+
+# ── Robustness ───────────────────────────────────────────────────────────────
+robustness:
+  min_cooccurrence_sweep: [5, 10, 20, 50]
+  neighbourhood_depths: [1, 2]
+  split_shift_weeks: [-10, 0, 10]
+  top_departments: 5          # run per-department subsets
+
+# ── Reproducibility ──────────────────────────────────────────────────────────
+seed: 42
+
+# ── Output paths ─────────────────────────────────────────────────────────────
+output:
+  results_dir: results
+  tables_dir: results/tables
+  figures_dir: results/figures

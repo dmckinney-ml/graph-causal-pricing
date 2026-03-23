@@ -1,0 +1,84 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env/
+
+# ── Poetry ────────────────────────────────────────────────────────────────────
+# Keep pyproject.toml and poetry.lock in version control
+# Ignore the local cache
+.cache/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Data files ────────────────────────────────────────────────────────────────
+data/raw/
+data/processed/
+
+# ── Results & outputs ─────────────────────────────────────────────────────────
+results/figures/
+results/tables/
+
+# ── Credentials & secrets ─────────────────────────────────────────────────────
+.env
+*.env
+secrets/
+credentials/
+service_account*.json
+gcloud_key*.json
+
+# ── OS / editor artefacts ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ── Type checkers ─────────────────────────────────────────────────────────────
+.mypy_cache/
+.pyright/
+
+# ── Profiling ─────────────────────────────────────────────────────────────────
+*.prof
+*.lprof
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Paper / LaTeX build artefacts ─────────────────────────────────────────────
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/*.synctex.gz
+paper/_minted*/
