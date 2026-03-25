@@ -209,7 +209,7 @@ def run_simulation_study(
     # n_jobs=-1 uses all cores; each sim is an independent process.
     # LightGBM also parallelises internally — if contention is observed,
     # lower n_jobs (e.g. n_jobs=4) and let LightGBM use the remaining cores.
-    batches = Parallel(n_jobs=-1, verbose=5)(
+    batches = Parallel(n_jobs=2, verbose=5)(
         delayed(_run_one)(sim_id) for sim_id in range(n_simulations)
     )
     return pd.DataFrame([row for batch in batches for row in batch])

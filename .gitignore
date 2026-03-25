@@ -24,6 +24,7 @@ env/
 # Keep pyproject.toml and poetry.lock in version control
 # Ignore the local cache
 .cache/
+.ruff_cache/
 
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
@@ -45,7 +46,7 @@ credentials/
 service_account*.json
 gcloud_key*.json
 
-# ── OS / editor artefacts ─────────────────────────────────────────────────────
+# ── OS / editor artifacts ─────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 .idea/
@@ -56,6 +57,7 @@ Thumbs.db
 # ── Testing & coverage ────────────────────────────────────────────────────────
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
 
@@ -71,7 +73,7 @@ htmlcov/
 *.log
 logs/
 
-# ── Paper / LaTeX build artefacts ─────────────────────────────────────────────
+# ── Paper / LaTeX build artifacts ─────────────────────────────────────────────
 paper/*.aux
 paper/*.bbl
 paper/*.blg
@@ -79,6 +81,10 @@ paper/*.fdb_latexmk
 paper/*.fls
 paper/*.log
 paper/*.out
-paper/*.pdf
+paper/*.toc
+paper/*.lof
+paper/*.lot
+paper/*.dvi
 paper/*.synctex.gz
+paper/*.synctex.gz(busy)
 paper/_minted*/

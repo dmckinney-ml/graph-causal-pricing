@@ -29,24 +29,24 @@ from gensim.models import Word2Vec
 
 # ── fast unbiased (DeepWalk) path ─────────────────────────────────────────────
 
-def _build_csr_neighbour_tables(
+def _build_csr_neighbor_tables(
     A: sp.spmatrix, pid_idx: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Pre-compute CSR-style neighbour and probability arrays directly from the
+    Pre-compute CSR-style neighbor and probability arrays directly from the
     sparse adjacency matrix — no networkx traversal needed at walk time.
 
     Returns
     -------
     node_ids   : (N,) int64 — product IDs in index order
-    indptr     : (N+1,) int64 — CSR row pointers into `neighbours` / `probs`
-    neighbours : (nnz,) int64 — neighbour indices (into node_ids)
+    indptr     : (N+1,) int64 — CSR row pointers into `neighbors` / `probs`
+    neighbors : (nnz,) int64 — neighbor indices (into node_ids)
     probs      : (nnz,) float64 — normalised transition probabilities
     """
     A_csr = A.tocsr().astype(np.float64)
     n = len(pid_idx)
     indptr = A_csr.indptr.copy().astype(np.int64)
-    neighbours = A_csr.indices.copy().astype(np.int64)
+    neighbors = A_csr.indices.copy().astype(np.int64)
 
     # Normalise each row to a proper probability distribution
     probs = A_csr.data.copy()
@@ -56,13 +56,13 @@ def _build_csr_neighbour_tables(
         if row_sum > 0:
             probs[s:e] /= row_sum
 
-    return pid_idx.astype(np.int64), indptr, neighbours, probs
+    return pid_idx.astype(np.int64), indptr, neighbors, probs
 
 
 def _generate_walks_unbiased(
     pid_idx: np.ndarray,
     indptr: np.ndarray,
-    neighbours: np.ndarray,
+    neighbors: np.ndarray,
     probs: np.ndarray,
     num_walks: int,
     walk_length: int,
@@ -83,7 +83,7 @@ def _generate_walks_unbiased(
                 s, e = indptr[cur], indptr[cur + 1]
                 if s == e:          # isolated node
                     break
-                nxt = int(rng.choice(neighbours[s:e], p=probs[s:e]))
+                nxt = int(rng.choice(neighbors[s:e], p=probs[s:e]))
                 walk.append(nxt)
                 cur = nxt
             walks.append([str(int(pid_idx[idx])) for idx in walk])
@@ -197,9 +197,9 @@ def train_node2vec(
 
     if p == 1.0 and q == 1.0:
         # Fast path: pre-compute per-node probabilities once, walk with numpy
-        _, indptr, neighbours_arr, probs_arr = _build_csr_neighbour_tables(A, pid_idx)
+        _, indptr, neighbors_arr, probs_arr = _build_csr_neighbor_tables(A, pid_idx)
         walks = _generate_walks_unbiased(
-            pid_idx, indptr, neighbours_arr, probs_arr,
+            pid_idx, indptr, neighbors_arr, probs_arr,
             num_walks, walk_length, seed=seed,
         )
     else:

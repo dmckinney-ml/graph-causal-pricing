@@ -6,8 +6,8 @@ the bivariate treatment (T_i, e_i_sub, e_i_comp) jointly and estimate
 three causal effects:
 
     1. Direct effect  — own promotion → own demand
-    2. Sub spillover  — substitute neighbour promotions → own demand (cannibalization)
-    3. Comp spillover — complement neighbour promotions → own demand (lift)
+    2. Sub spillover  — substitute neighbor promotions → own demand (cannibalization)
+    3. Comp spillover — complement neighbor promotions → own demand (lift)
 
 The exposure variables e_i use the actual graph edge weights (PPMI for
 complements, cosine similarity for substitutes), keeping graph structure
@@ -64,18 +64,21 @@ def _oneway_cluster_vcov(
     cluster_ids: (n,) integer cluster labels
     """
     n, k = X.shape
-    XtX_inv = np.linalg.inv(X.T @ X)
+    XtX_inv = np.linalg.pinv(X.T @ X)
 
-    unique_clusters = np.unique(cluster_ids)
-    G = len(unique_clusters)
+    scores = X * residuals[:, None]  # (n, k) score per observation
 
-    B = np.zeros((k, k))
-    for g in unique_clusters:
-        mask = cluster_ids == g
-        Xg_eg = X[mask].T @ residuals[mask]  # (k,)
-        B += np.outer(Xg_eg, Xg_eg)
+    # Map cluster IDs to contiguous integers for np.bincount
+    _, inv = np.unique(cluster_ids, return_inverse=True)
+    G = int(inv.max()) + 1
 
-    # Small-sample correction: G/(G-1) * (n-1)/(n-k)
+    # Sum scores within each cluster — O(n) at C level, replaces O(G*n) Python loop
+    cluster_scores = np.column_stack([
+        np.bincount(inv, weights=scores[:, j], minlength=G)
+        for j in range(k)
+    ])  # (G, k)
+
+    B = cluster_scores.T @ cluster_scores  # (k, k)
     correction = (G / (G - 1)) * ((n - 1) / (n - k))
     return correction * XtX_inv @ B @ XtX_inv
 
@@ -179,10 +182,12 @@ def _get_nuisance_models():
     model_y = LGBMRegressor(
         n_estimators=200, max_depth=6, learning_rate=0.1,
         num_leaves=31, min_child_samples=20, verbose=-1,
+        num_threads=5,
     )
     model_t = LGBMRegressor(
         n_estimators=200, max_depth=6, learning_rate=0.1,
         num_leaves=31, min_child_samples=20, verbose=-1,
+        num_threads=5,
     )
     return model_y, model_t
 
@@ -238,7 +243,7 @@ def run_graph_dml(
             print(f"  demand filter: kept {n_after:,}/{n_before:,} rows "
                   f"({len(keep_pids):,} products with mean {outcome_col} ≥ {min_demand_filter})")
 
-    # 1. Compute weighted neighbourhood exposures
+    # 1. Compute weighted neighborhood exposures
     panel_exp = add_exposures(
         panel_work, A_sub, sub_pid_idx, A_comp, comp_pid_idx,
         treatment_col=treatment_col,

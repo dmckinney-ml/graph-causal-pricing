@@ -3,14 +3,14 @@ Compute graph-based spillover features for the causal panel.
 
 For each observation (STORE_ID, PRODUCT_ID, WEEK_NO), adds:
 
-  Substitute neighbourhood (A_sub):
-    n_treated_substitutes      – count of substitute neighbours with promo_any=1
-    frac_treated_substitutes   – fraction of substitute neighbours treated
+  Substitute neighborhood (A_sub):
+    n_treated_substitutes      – count of substitute neighbors with promo_any=1
+    frac_treated_substitutes   – fraction of substitute neighbors treated
     avg_units_substitutes      – mean units_sold of substitutes in same store-week
 
-  Complement neighbourhood (A_comp):
-    n_treated_complements      – count of complement neighbours with promo_any=1
-    frac_treated_complements   – fraction of complement neighbours treated
+  Complement neighborhood (A_comp):
+    n_treated_complements      – count of complement neighbors with promo_any=1
+    frac_treated_complements   – fraction of complement neighbors treated
     avg_units_complements      – mean units_sold of complements in same store-week
 """
 
@@ -49,7 +49,7 @@ def add_spillover_features(
     panel = panel.copy()
 
     # Binary adjacency — weights are used for substitute reweighting elsewhere;
-    # here we need counts, so treat any non-zero edge as a single neighbour.
+    # here we need counts, so treat any non-zero edge as a single neighbor.
     A_sub_bin = (A_sub != 0).astype(np.float32)
     A_comp_bin = (A_comp != 0).astype(np.float32)
 

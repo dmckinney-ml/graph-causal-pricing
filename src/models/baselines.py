@@ -9,6 +9,8 @@ B4: LinearDML + unweighted spillover features as confounders
 
 from __future__ import annotations
 
+import gc
+import resource
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,6 +18,18 @@ import pandas as pd
 import statsmodels.api as sm
 from econml.dml import LinearDML, CausalForestDML
 from lightgbm import LGBMRegressor
+
+
+def _log_memory(label: str = "") -> None:
+    """Print current RSS in GB."""
+    rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # macOS returns bytes, Linux returns KB
+    import sys
+    if sys.platform == "darwin":
+        rss_gb = rss_bytes / 1e9
+    else:
+        rss_gb = rss_bytes / 1e6
+    print(f"  [mem] {label} RSS={rss_gb:.1f} GB")
 
 
 # ── Result container ─────────────────────────────────────────────────────────
@@ -175,6 +189,7 @@ def run_causal_forest_baseline(
         cv=n_folds,
         n_estimators=n_estimators,
         max_depth=max_depth,
+        max_samples=0.1,
         random_state=seed,
     )
     est.fit(Y, T, X=X)
@@ -288,10 +303,16 @@ def run_all_baselines(
     confidence_level: float = 0.95,
     seed: int = 42,
     include_discount_rate: bool = False,
+    dml_max_rows: int = 10_000_000,
 ) -> list[CausalResult]:
-    """Run all 4 baselines and return results."""
+    """Run all 4 baselines and return results.
+
+    B1 (OLS) runs on the full panel (low memory — 6 features, no embeddings).
+    B2, B3, B4 (DML variants) subsample to dml_max_rows to avoid OOM on large
+    panels — the ATE estimates are statistically robust at 10M rows and these
+    are comparison baselines, not the primary estimator.
+    """
     common = dict(
-        panel=panel,
         outcome_col=outcome_col,
         treatment_col=treatment_col,
         embeddings=embeddings,
@@ -299,12 +320,52 @@ def run_all_baselines(
         confidence_level=confidence_level,
         include_discount_rate=include_discount_rate,
     )
-    results = [
-        run_ols_baseline(**common),
-        run_causal_forest_baseline(**common, n_folds=n_folds, seed=seed),  # uses default n_estimators/max_depth
-        run_dml_baseline(**common, n_folds=n_folds, seed=seed),
-        run_dml_unweighted_spillover(**common, n_folds=n_folds, seed=seed),
-    ]
+
+    # DML subsample for B2/B3/B4
+    if len(panel) > dml_max_rows:
+        dml_panel = panel.sample(n=dml_max_rows, random_state=seed)
+        print(f"DML baselines (B2-B4): subsampled to {dml_max_rows:,} rows "
+              f"(from {len(panel):,}) for memory efficiency")
+    else:
+        dml_panel = panel
+
+    results: list[CausalResult] = []
+
+    # B1: OLS on full panel (6 features, ~4 GB peak)
+    print(f"[B1] Starting OLS on {len(panel):,} rows...")
+    _log_memory("B1 start")
+    results.append(run_ols_baseline(panel=panel, **common))
+    print(f"[B1] OLS complete. ATE={results[-1].ate:.6f}")
+    _log_memory("B1 end")
+    gc.collect()
+
+    # B2: CausalForestDML on subsampled panel
+    print(f"[B2] Starting CausalForestDML on {len(dml_panel):,} rows...")
+    _log_memory("B2 start")
+    results.append(run_causal_forest_baseline(
+        panel=dml_panel, **common, n_folds=n_folds, seed=seed))
+    print(f"[B2] CausalForestDML complete. ATE={results[-1].ate:.6f}")
+    _log_memory("B2 end")
+    gc.collect()
+
+    # B3: LinearDML on subsampled panel
+    print(f"[B3] Starting LinearDML on {len(dml_panel):,} rows...")
+    _log_memory("B3 start")
+    results.append(run_dml_baseline(
+        panel=dml_panel, **common, n_folds=n_folds, seed=seed))
+    print(f"[B3] LinearDML complete. ATE={results[-1].ate:.6f}")
+    _log_memory("B3 end")
+    gc.collect()
+
+    # B4: LinearDML + spillover on subsampled panel
+    print(f"[B4] Starting LinearDML+spillover on {len(dml_panel):,} rows...")
+    _log_memory("B4 start")
+    results.append(run_dml_unweighted_spillover(
+        panel=dml_panel, **common, n_folds=n_folds, seed=seed))
+    print(f"[B4] LinearDML+spillover complete. ATE={results[-1].ate:.6f}")
+    _log_memory("B4 end")
+    gc.collect()
+
     return results
 
 

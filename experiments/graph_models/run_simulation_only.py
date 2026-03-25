@@ -1,13 +1,17 @@
 """
-Run the graph-aware exposure-mapping DML and save results.
+Run only the semi-synthetic simulation study, skipping the initial DML fits.
+Use this to resume after the initial graph_model_results/effect_comparison/
+cate_by_department CSVs have already been written.
 
 Usage:
     cd graph-causal-pricing
-    python experiments/graph_models/run_graph_dml.py
+    nohup poetry run python -m experiments.graph_models.run_simulation_only \
+      > results/run_simulation_only.log 2>&1 &
 """
 
 from __future__ import annotations
 
+import gc
 import sys
 from pathlib import Path
 
@@ -20,8 +24,7 @@ import scipy.sparse as sp
 import yaml
 
 from src.data.splits import create_temporal_split
-from src.causal.graph_dml import run_graph_dml, graph_result_to_dataframe
-from src.causal.interpretability import cate_by_group, compare_effects
+from src.causal.graph_dml import run_graph_dml
 from src.evaluation.synthetic_dgp import SyntheticDGPConfig, run_simulation_study
 from src.evaluation.metrics import full_synthetic_evaluation
 
@@ -46,81 +49,20 @@ def main():
     )
     train_panel = splits["train"]
 
-    # Subsample for memory safety (consistent with baselines)
+    # Subsample — must match the same seed/max_rows as the original run
     max_rows = 6_000_000
     if len(train_panel) > max_rows:
         train_panel = train_panel.sample(n=max_rows, random_state=seed)
         print(f"Subsampled to {max_rows:,} rows (from {splits['train'].shape[0]:,})")
 
-    print(f"Running graph-aware DML on {len(train_panel):,} observations")
-
-    # Run with edge weights (the main model)
-    result = run_graph_dml(
-        panel=train_panel,
-        A_sub=A_sub,
-        sub_pid_idx=pid_idx,
-        A_comp=A_comp,
-        comp_pid_idx=pid_idx,
-        outcome_col=cfg["outcome"]["primary"],
-        treatment_col=cfg["treatment"]["primary"],
-        weight_type="edge_weight",
-        n_folds=cfg["dml"]["n_folds"],
-        embeddings=embeddings,
-        emb_pid_idx=pid_idx,
-        confidence_level=cfg["dml"]["confidence_level"],
-        seed=seed,
-        log_transform=cfg["dml"]["log_transform"],
-        min_demand_filter=cfg["dml"]["min_demand_filter"],
-        include_discount_rate=cfg["dml"].get("include_discount_rate", False),
-    )
-
-    # Also run with binary weights for comparison
-    result_binary = run_graph_dml(
-        panel=train_panel,
-        A_sub=A_sub,
-        sub_pid_idx=pid_idx,
-        A_comp=A_comp,
-        comp_pid_idx=pid_idx,
-        outcome_col=cfg["outcome"]["primary"],
-        treatment_col=cfg["treatment"]["primary"],
-        weight_type="binary",
-        n_folds=cfg["dml"]["n_folds"],
-        embeddings=embeddings,
-        emb_pid_idx=pid_idx,
-        confidence_level=cfg["dml"]["confidence_level"],
-        seed=seed,
-        log_transform=cfg["dml"]["log_transform"],
-        min_demand_filter=cfg["dml"]["min_demand_filter"],
-        include_discount_rate=cfg["dml"].get("include_discount_rate", False),
-    )
-
-    # Save results
-    out_dir = ROOT / cfg["output"]["tables_dir"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    df_weighted = graph_result_to_dataframe(result)
-    df_binary = graph_result_to_dataframe(result_binary)
-    df_all = pd.concat([df_weighted, df_binary], ignore_index=True)
-    df_all.to_csv(out_dir / "graph_model_results.csv", index=False)
-
-    # Effect comparison
-    effects = compare_effects(result)
-    effects.to_csv(out_dir / "effect_comparison.csv", index=False)
-
-    # CATE by department
-    cate_dept = cate_by_group(train_panel, result, group_col="DEPARTMENT")
-    cate_dept.to_csv(out_dir / "cate_by_department.csv")
-
-    # Free cached EconML objects before simulation study — each holds 5-fold
-    # cross-fitted residuals + fitted LightGBM models (~15-25 GB combined).
-    # They are no longer needed after the CSVs above are written.
-    import gc
-    del result, result_binary
+    # Free the full panel immediately — we only need train_panel from here
+    del panel, splits
     gc.collect()
 
-    # Semi-synthetic simulation study
-    print("\nRunning semi-synthetic simulation study "
-          f"({cfg['synthetic']['n_simulations']} sims on full training panel)...")
+    print(f"Running simulation study on {len(train_panel):,} observations")
+
+    out_dir = ROOT / cfg["output"]["tables_dir"]
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     dgp_cfg = SyntheticDGPConfig(
         true_direct_effect=cfg["synthetic"]["true_direct_effect"],
@@ -155,6 +97,9 @@ def main():
             "comp_spillover":(sim_result.comp_spillover_ate,*sim_result.comp_spillover_ci),
         }
 
+    print(f"\nRunning semi-synthetic simulation study "
+          f"({cfg['synthetic']['n_simulations']} sims)...")
+
     sim_results = run_simulation_study(
         panel=train_panel,
         A_sub=A_sub, sub_pid_idx=pid_idx,
@@ -169,12 +114,7 @@ def main():
 
     print("\n— Semi-synthetic evaluation —")
     print(eval_summary.to_string(index=False))
-
-    print(f"\nResults saved to {out_dir}")
-    print("\n— Effect comparison (edge-weighted) —")
-    print(effects.to_string(index=False))
-    print("\n— Graph model results —")
-    print(df_all.to_string(index=False))
+    print(f"\nResults saved to {out_dir / 'synthetic_evaluation.csv'}")
 
 
 if __name__ == "__main__":

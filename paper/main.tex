@@ -1,0 +1,719 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{Graph-Aware Double Machine Learning for Retail Pricing Spillovers}
+
+\author{
+  \IEEEauthorblockN{David M. McKinney}
+  \IEEEauthorblockA{Independent Researcher\\
+    Ann Arbor, MI, USA}
+}
+
+\begin{document}
+\maketitle
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{abstract}
+    Promotional pricing decisions in retail don't just affect the promoted
+    product --- they ripple across substitute and complementary items in ways
+    that standard causal estimators miss entirely.
+    We propose a \emph{graph-aware Double Machine Learning} framework that
+    explicitly models these spillovers by building a product co-purchase
+    and similarity graph, computing weighted neighborhood exposure variables,
+    and fitting a linear DML estimator with two-way cluster-robust standard
+    errors.
+    On the Dunnhumby retail panel (49.9\,M transactions, 92\,K products),
+    we estimate a direct promotion effect of $+0.037$ on the
+    $\log(1 + \text{units sold})$ scale
+    (95\% CI: $[0.034,\, 0.041]$), a statistically significant substitute
+    cannibalization effect of $-0.0022$ ($p < 0.01$), and a positive but
+    noisy complement attachment effect.
+    An ablation study shows that removing Node2Vec product embeddings inflates
+    the direct ATE by 16\% and the substitute spillover by 2.2$\times$,
+    with a shift consistent with embeddings capturing latent demand structure
+    and product-level omitted variables that simpler approaches leave behind.
+    A semi-synthetic evaluation finds low bias overall, but also shows that
+    direct-effect confidence intervals undercover, so the uncertainty on the
+    direct effect should be interpreted cautiously.
+\end{abstract}
+
+\begin{IEEEkeywords}
+    causal inference, double machine learning, graph spillovers,
+    retail pricing, treatment effects, exposure mapping
+\end{IEEEkeywords}
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+
+When a grocery retailer puts yogurt on promotion, sales go up --- but
+which yogurts? Customers who were going to buy a competing brand may switch
+over (substitution), while shoppers buying yogurt may also grab granola
+(complementarity).
+Standard causal estimators treat each product in isolation and miss both
+effects.
+
+Capturing these spillovers is not just theoretically interesting; it has
+real business consequences.
+A pricing team that ignores cannibalization will over-count the value of
+promotions, and one that ignores complement attachment will under-invest in
+category-level cross-promotion strategies.
+
+This paper makes three main contributions:
+
+\begin{enumerate}
+    \item We formalize retail pricing spillovers through the lens of
+          \emph{exposure mapping} \cite{aronow2017estimating}, representing each
+          product's neighborhood treatment intensity as a weighted aggregate of
+          its graph neighbors' promotion statuses.
+
+    \item We integrate these exposure variables into a
+          \emph{Double ML} \cite{chernozhukov2018double} framework with
+          LightGBM \cite{ke2017lightgbm} nuisance models and two-way clustered
+          standard errors \cite{cameron2011robust}, yielding scalable
+          cluster-robust inference over
+          49.9\,M retail transactions.
+
+    \item Through a five-way ablation study, we demonstrate that
+          Node2Vec \cite{grover2016node2vec} product embeddings are the most
+          critical modeling choice: removing them biases estimates substantially,
+          while the choice of binary vs.\ edge-weighted adjacency has almost no
+          impact.
+\end{enumerate}
+
+Our central empirical point is not just that graphs add predictive features.
+By encoding which products interact, graph structure lets us estimate
+downstream treatment effects that standard no-graph specifications either
+omit or misattribute.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Related Work}
+
+\paragraph{Double Machine Learning.}
+Chernozhukov et al.\ \cite{chernozhukov2018double} introduced DML to
+remove regularization bias when using flexible machine learning models for
+nuisance estimation.
+Their cross-fitting procedure guarantees $\sqrt{n}$-consistent, Gaussian
+inference under weak conditions.
+We adopt their \texttt{LinearDML} implementation from
+EconML \cite{battocchi2019econml}.
+
+\paragraph{Interference and Spillovers.}
+The SUTVA assumption of standard causal inference---that a unit's outcome
+depends only on its own treatment---fails whenever units interact.
+Hudgens and Halloran \cite{hudgens2008toward} laid the groundwork for
+causal inference under interference, and Aronow and
+Samii \cite{aronow2017estimating} introduced exposure mapping as a general
+device for specifying how spillovers enter the potential outcomes model.
+We apply exposure mapping to the product-level retail setting, where
+``interference'' is mediated by the product graph.
+
+\paragraph{Heterogeneous Treatment Effects.}
+Wager and Athey \cite{wager2018estimation} developed causal forests for
+non-parametric CATE estimation.
+We use a causal forest as one baseline but rely on the linear DML as our
+primary estimator, since interpretability and valid standard errors are more
+important than flexibility for our spillover decomposition.
+
+\paragraph{Product Graphs in Retail.}
+Representing product relationships as a graph and using graph neural
+networks for recommendation has been studied extensively.
+Our work is different: we use the graph not for prediction but to construct
+valid exposure variables for causal estimation, keeping graph structure
+inside the identification argument rather than treating it as a
+feature-engineering step.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Data}
+
+\subsection{The Dunnhumby Complete Journey Dataset}
+
+We use the publicly available Dunnhumby ``Complete Journey''
+dataset \cite{dunnhumby2020journey}, which records household-level
+purchases at a US grocery chain over roughly two years.
+The raw dataset contains 49.9\,M transaction records spanning 2,500
+households, 391 stores, and 92,339 unique products across 44 departments.
+
+We aggregate to a \emph{panel} at the grain
+$(i, s, t) = (\text{PRODUCT\_ID}, \text{STORE\_ID}, \text{WEEK\_NO})$.
+The primary outcome is \texttt{units\_sold}, log-transformed as
+$Y = \log(1 + \text{units})$ to handle the zero-inflated count
+distribution.
+Products with mean weekly sales below 0.01 units are dropped as structural
+zeros, leaving 31,142 active products and 49.9\,M panel rows.
+Experiments use a 6\,M-row random subsample of the training split for
+computational tractability.
+
+\subsection{Substitute Graph}
+
+We train Node2Vec \cite{grover2016node2vec} embeddings on the
+co-purchase graph to obtain 64-dimensional product representations.
+The substitute adjacency matrix $A^{\mathrm{sub}}$ is built by computing
+cosine similarity between embedding pairs and retaining the top-$k$
+neighbors above a similarity threshold.
+Edge weights reflect semantic product similarity.
+
+\subsection{Complement Graph}
+
+The complement adjacency matrix $A^{\mathrm{comp}}$ is derived from
+Positive Pointwise Mutual Information (PPMI) \cite{church1990word}
+applied to basket-level co-purchase counts.
+High PPMI between two products indicates they are purchased together more
+often than chance, capturing complementarity.
+
+\subsection{Treatment and Covariates}
+
+The primary treatment variable is \texttt{promo\_any}, a binary indicator
+for whether a product received any display or mailer promotion in a given
+store-week.
+A secondary model estimates effects of the continuous treatment
+\texttt{discount\_rate} (fractional price markdown).
+The covariate matrix $W$ includes store ID, week number, department,
+commodity description, sub-commodity, brand, and Node2Vec embedding
+coordinates for each product.
+These controls are intended to absorb the main observable drivers of both
+promotion assignment and demand: store ID captures persistent
+location-level merchandising differences, week number captures calendar and
+seasonal demand shifts, product taxonomy captures broad assortment
+structure, and embedding coordinates provide dense product-level controls
+for latent similarity in demand and promotion propensity.
+
+\subsection{Experimental Setup}
+
+All reported graph-DML estimates use the temporal training window from
+weeks 1--70, with weeks 71--85 reserved for validation and weeks 86--102
+reserved for test-time extensions.
+The published graph-DML, discount, and ablation tables are fit on a
+6\,M-row random subsample of the training split, which drops to
+5.19\,M rows after filtering products with mean weekly demand below 0.01.
+
+The complement graph retains product pairs with at least 10 same-basket
+co-occurrences and weights retained edges by normalized PPMI.
+Node2Vec embeddings use dimension 64, 10 walks per node, walk length 80,
+$p = q = 1$ (the unbiased DeepWalk setting), 5 Word2Vec epochs, and seed 42.
+The substitute graph connects products within the same
+\texttt{SUB\_COMMODITY\_DESC} and keeps up to 50 neighbors per node,
+reweighted by cosine similarity in embedding space.
+
+For nuisance estimation, both $E[Y \mid W]$ and $E[T \mid W]$ are modeled
+with LightGBM regressors using 200 trees, depth 6, learning rate 0.1,
+31 leaves, minimum child sample size 20, and 5 threads.
+Cross-fitting uses $K=5$ folds via \texttt{GroupKFold}, grouping on
+\texttt{PRODUCT\_ID} so that all store-weeks for a product stay in the same
+fold.
+The primary outcome is modeled on the $\log(1 + \text{units sold})$ scale.
+For the continuous-treatment specification, \texttt{discount\_rate} is scaled
+to $[0,1]$, so its coefficients should be interpreted per unit change in the
+fractional discount rate rather than per one-percentage-point change.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Methodology}
+
+\subsection{Exposure Mapping}
+
+For each panel observation $(i, s, t)$, we define two spillover treatment
+variables: the weighted fraction of substitute and complement neighbors that
+are currently promoted.
+
+\begin{equation}
+    e_i^{\mathrm{sub}} = \frac{\sum_{j} A^{\mathrm{sub}}_{ij}\, T_{jst}}%
+    {\sum_{j} A^{\mathrm{sub}}_{ij}\, \mathbf{1}[j \in \mathcal{S}_{st}]},
+    \label{eq:exposure}
+\end{equation}
+
+\noindent and analogously for $e_i^{\mathrm{comp}}$ using $A^{\mathrm{comp}}$.
+Here $\mathcal{S}_{st}$ is the set of products available in store $s$ at
+week $t$, and $T_{jst}$ is the promotion indicator for product~$j$.
+The denominator normalizes by the number of observable neighbors, not the
+total degree, to avoid boundary effects from sparse store assortments.
+
+This one-hop exposure mapping assumes that spillovers propagate only through
+direct graph neighbors.
+That assumption is substantively reasonable in grocery retail, where the
+largest substitution and attachment responses are typically concentrated in
+the closest product alternatives and co-purchase partners.
+Accordingly, our estimates should be interpreted as \emph{local one-hop}
+spillover effects induced by the observed product graph.
+Expanding the neighborhood radius is a natural robustness check, but we do
+not pursue it here.
+
+\subsection{Double ML Estimator}
+
+We model the bivariate treatment as
+$\mathbf{T}_i = [T_i,\, e_i^{\mathrm{sub}},\, e_i^{\mathrm{comp}}]^\top$
+and estimate:
+
+\begin{equation}
+    Y_i = \boldsymbol{\theta}^\top \mathbf{T}_i + g(W_i) + \epsilon_i,
+    \label{eq:model}
+\end{equation}
+
+\noindent where $g(\cdot)$ is a nuisance function approximated by
+LightGBM \cite{ke2017lightgbm} and $\boldsymbol{\theta}$ contains
+the three causal effects of interest.
+
+We use the \texttt{LinearDML} implementation from EconML
+\cite{battocchi2019econml} with $K=5$ cross-fitting folds, where fold
+assignment groups all store-weeks of a given product together
+(\texttt{GroupKFold}) to prevent leakage between nuisance and final-stage
+estimation.
+
+\subsection{Identification Assumptions}
+
+Our causal interpretation relies on a conditional ignorability assumption for
+both own treatment and graph exposure: conditional on $W_i$, the joint
+treatment vector $[T_i, e_i^{\mathrm{sub}}, e_i^{\mathrm{comp}}]$ is assumed
+as-good-as-random with respect to potential outcomes.
+Operationally, this means that after conditioning on product identity and
+similarity proxies (taxonomy and embeddings), store effects, and calendar
+time, there are no remaining systematic drivers of promotion assignment that
+also directly shift demand.
+
+Under this design, $W$ is not just a predictive feature set; it is the set of
+observed controls used to block the main backdoor paths from promotional
+assignment to sales.
+The DML procedure then flexibly partials out $E[Y \mid W]$ and
+$E[T \mid W]$ before estimating the low-dimensional treatment effects.
+DML is critical here because spillover-adjusted treatment effects are
+estimated in a high-dimensional setting where naive regularization of the
+nuisance models could otherwise bias the target coefficients.
+We also require overlap: products with comparable observed characteristics
+must have non-degenerate variation in promotion and neighborhood exposure.
+
+Because the data are observational, this assumption is ultimately
+unverifiable.
+Residual confounding may remain if unobserved store-week shocks---such as
+local events, competitor actions, or supplier-funded campaigns---jointly
+affect promotion decisions and demand for clusters of related products.
+Our results should therefore be read as estimates under conditional
+ignorability given the observed product, store, time, and embedding-based
+controls.
+
+\subsection{Two-Way Cluster-Robust Standard Errors}
+
+Errors are correlated within products (same item promoted across stores)
+and within stores (chain-wide promotional events).
+We apply the Cameron-Gelbach-Miller (CGM) two-way clustering
+estimator \cite{cameron2011robust}:
+
+\begin{equation}
+    \hat{V}_{\mathrm{2way}} = \hat{V}_{\mathrm{product}}
+    + \hat{V}_{\mathrm{store}}
+    - \hat{V}_{\mathrm{product}\times\mathrm{store}},
+    \label{eq:cgm}
+\end{equation}
+
+\noindent where each one-way variance is computed using the Liang-Zeger
+sandwich estimator \cite{liang1986longitudinal} applied to the
+DML residuals.
+The final-stage OLS uses a pseudoinverse ($\hat{X}^+$) rather than a
+standard inverse to gracefully handle ablation conditions where one
+treatment column is identically zero.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Results}
+
+\subsection{Main Effects}
+
+Table~\ref{tab:main} shows the estimated average treatment effects for the
+primary binary-promotion model.
+
+\begin{table}[ht]
+    \centering
+    \caption{Main causal effect estimates (binary promotion treatment).
+        95\% confidence intervals use two-way cluster-robust SEs clustered
+        on product and store. $n = 5.19\,\mathrm{M}$ observations.}
+    \label{tab:main}
+    \begin{tabular}{lccc}
+        \toprule
+        Effect               & ATE       & CI lower  & CI upper  \\
+        \midrule
+        Direct (own promo)   & $+0.0373$ & $0.0337$  & $0.0408$  \\
+        Substitute spillover & $-0.0022$ & $-0.0036$ & $-0.0007$ \\
+        Complement spillover & $+0.0003$ & $-0.0010$ & $+0.0016$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The direct promotion effect is positive and precisely estimated on the
+$\log(1 + \text{units sold})$ scale: the direct coefficient is 0.037 with a
+tight clustered confidence interval, corresponding to roughly a 3.8\%
+increase in expected units as a back-of-the-envelope translation.
+The substitute spillover is negative and statistically significant at
+$p < 0.01$, confirming cannibalization: when a product's graph substitutes
+are promoted, the focal product's expected outcome declines modestly.
+The complement spillover is positive but small and does not reach
+conventional significance levels, suggesting that complement attachment lift
+exists directionally but is too noisy to detect reliably in this dataset.
+
+\subsection{Baseline Comparison}
+
+Table~\ref{tab:baselines} benchmarks our graph-aware DML against four
+alternative estimators on the direct ATE.
+Figure~\ref{fig:baselines} plots these comparisons visually.
+
+\begin{table}[ht]
+    \centering
+    \caption{Direct ATE estimates across estimators.
+        OLS and DML no-graph use no spillover features;
+        DML unweighted spillover uses binary co-purchase fractions
+        rather than the graph-weighted exposure variables.}
+    \label{tab:baselines}
+    \begin{tabular}{lcc}
+        \toprule
+        Model                       & ATE                & 95\% CI              \\
+        \midrule
+        OLS (no graph)              & $+0.0404$          & $[0.0401,\, 0.0406]$ \\
+        Causal forest (no graph)    & $+0.0307$          & $[0.0152,\, 0.0462]$ \\
+        DML (no graph)              & $+0.0290$          & $[0.0285,\, 0.0295]$ \\
+        DML + unweighted spillover  & $+0.0270$          & $[0.0252,\, 0.0289]$ \\
+        \textbf{DML + graph (ours)} & $\mathbf{+0.0373}$ & $[0.0337,\, 0.0408]$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+OLS without graph features produces the largest direct ATE ($+0.040$) ---
+its tight confidence interval is an artifact of ignoring non-linear
+confounding.
+The standard DML estimate ($+0.029$) is lower once flexible confound
+adjustment is applied.
+Adding unweighted spillover controls reduces the direct effect further
+($+0.027$), consistent with spillover confounding in the no-graph estimates.
+Our graph-aware DML yields a slightly higher direct effect ($+0.037$)
+than the no-graph DML baselines.
+This pattern is consistent with spillover structure affecting which observed
+variation is attributed to own-treatment versus neighbor-treatment channels,
+although the real-data setting does not identify the ground-truth
+decomposition.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{../results/figures/baselines_vs_graph_direct.png}
+    \caption{Direct ATE with 95\% CIs across five estimators. Error bars
+        for the causal forest are wider due to the 10\,M-row subsample used
+        for that estimator.}
+    \label{fig:baselines}
+\end{figure}
+
+\subsection{Discount Rate Model}
+
+Table~\ref{tab:discount} shows results for the continuous
+\texttt{discount\_rate} treatment.
+
+\begin{table}[ht]
+    \centering
+    \caption{Estimated effects in the continuous discount-rate model.
+        The treatment is \texttt{discount\_rate} on the $[0,1]$ scale, so
+        coefficients are reported per unit change in fractional discount depth.}
+    \label{tab:discount}
+    \begin{tabular}{lccc}
+        \toprule
+        Effect               & ATE      & CI lower & CI upper \\
+        \midrule
+        Direct               & $+2.43$  & $+2.38$  & $+2.47$  \\
+        Substitute spillover & $-0.016$ & $-0.046$ & $+0.015$ \\
+        Complement spillover & $+0.014$ & $+0.006$ & $+0.021$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Coefficients are reported on the $\log(1 + \text{units sold})$ scale per
+unit change in \texttt{discount\_rate}, where a unit corresponds to moving
+from a 0\% to 100\% discount.
+Under a local linear approximation, a 10-percentage-point deeper discount
+corresponds to about 0.243 log-points on the direct channel.
+The direct effect is strongly positive, indicating meaningful price
+sensitivity beyond the binary promotion indicator.
+The complement spillover is now statistically significant ($p < 0.01$):
+deeper discounting on a product generates measurable attachment lift for its
+graph complements, consistent with customers expanding their basket when a
+core item is more deeply discounted.
+Taken together with the near-zero complement estimate in the binary-promotion
+model, this suggests that coarse promotion indicators may be too weak to
+detect complementarity, whereas continuous discount depth carries a stronger
+behavioral signal.
+For substitutes, the spillover is negative but does not reach significance
+under continuous treatment.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Heterogeneous Treatment Effects}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{../results/figures/cate_by_department.png}
+    \caption{Average conditional treatment effects by department.
+        Color: direct ATE magnitude; rows sorted by direct effect.
+        Departments with fewer than 10 observations are excluded.}
+    \label{fig:cate}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{../results/figures/cannibalization_by_dept.png}
+    \caption{Substitute spillover (cannibalization) by department.
+        Negative values indicate demand loss when substitute neighbors are
+        promoted.}
+    \label{fig:cannibalization}
+\end{figure}
+
+Figures~\ref{fig:cate} and~\ref{fig:cannibalization} decompose effects
+by retail department.
+
+\paragraph{Strongest direct responders.}
+Salad Bar (ATE $= +0.080$), Garden Center ($+0.074$), Produce ($+0.067$),
+and Toys ($+0.057$) show the largest direct responses to promotion.
+These are either perishable or discretionary categories where promotional
+salience has an outsized effect on purchase incidence.
+
+\paragraph{Weakest or negative direct responders.}
+Kiosk/Gas ($-0.026$) and Automotive ($-0.008$) show negative direct
+effects.
+These likely reflect the fact that fuel and automotive products follow
+external price signals (posted pump prices), and store-level promotions
+may signal lower quality or confuse customers rather than drive volume.
+
+\paragraph{Cannibalization leaders.}
+Travel \& Leisure ($-0.025$), Postal Center ($-0.013$), and Spirits
+($-0.009$) show the strongest substitute cannibalization effects.
+These are narrowly defined categories where promoted SKUs directly compete
+with close alternatives in the same section.
+
+\paragraph{Complement attachment.}
+Several departments show positive complement effects in the discount
+model (Table~\ref{tab:discount}), consistent with the idea that
+deeply discounted staples drive basket expansion.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Ablation Study}
+
+To isolate the contribution of each modeling component, we run five
+variants of the full model:
+
+\begin{itemize}
+    \item \textbf{Full model}: edge-weighted graph + Node2Vec embeddings
+    \item \textbf{Binary weights}: replace PPMI/cosine edge weights with
+          unweighted adjacency ($w_{ij} \in \{0,1\}$)
+    \item \textbf{No embeddings}: omit Node2Vec coordinates from $W$
+    \item \textbf{Substitutes only}: zero out $A^{\mathrm{comp}}$
+    \item \textbf{Complements only}: zero out $A^{\mathrm{sub}}$
+\end{itemize}
+
+Table~\ref{tab:ablation} and Figure~\ref{fig:ablation} summarize the results.
+
+\begin{table}[ht]
+    \centering
+    \caption{Ablation study results. All variants use the same 6\,M-row
+        training sample. ``---'' marks structurally excluded effects.}
+    \label{tab:ablation}
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabular}{lccc}
+        \toprule
+                         & Direct    & Sub spill. & Comp spill. \\
+        \midrule
+        Full model       & $+0.0373$ & $-0.0022$  & $+0.0003$   \\
+        Binary weights   & $+0.0372$ & $-0.0022$  & $+0.0008$   \\
+        No embeddings    & $+0.0431$ & $-0.0048$  & $+0.0024$   \\
+        Substitutes only & $+0.0373$ & $-0.0021$  & ---         \\
+        Complements only & $+0.0369$ & ---        & $+0.0001$   \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{../results/figures/ablation_comparison.png}
+    \caption{Ablation study: estimated ATEs with 95\% CIs across five
+        model variants. Hatched bars marked ``(excluded)'' indicate
+        structurally zeroed-out exposures. The annotation on the Direct
+        Effect panel highlights the +16\% inflation when embeddings are removed.}
+    \label{fig:ablation}
+\end{figure}
+
+\paragraph{Edge weights vs.\ binary.}
+The estimates are nearly identical ($\Delta \approx 0.0001$).
+This tells us that graph \emph{topology}---which products are neighbors---is
+what matters, not the precise calibration of edge weights.
+For this dataset, a simpler binary co-purchase graph appears sufficient.
+
+\paragraph{Removing embeddings.}
+This is the most consequential ablation.
+The direct ATE jumps from $+0.037$ to $+0.043$ ($+16\%$), and the
+substitute spillover nearly doubles from $-0.0022$ to $-0.0048$.
+Node2Vec coordinates are included in the covariate matrix $W$, where they
+act as rich product-level controls.
+Without them, product-level confounding that correlates with both promotion
+likelihood and baseline demand appears to leak into the treatment effect estimates.
+This is analogous to omitted variable bias: categories that are both
+more promotable and more elastic look like they have larger treatment effects
+unless product-level fixed effects---here, approximated by continuous
+embeddings---are controlled.
+While embeddings may capture both latent demand structure and residual
+confounding, the magnitude and direction of the ablation shift are
+consistent with omitted-variable bias at the product level.
+
+\paragraph{Sub-only vs.\ comp-only.}
+Direct and substitute effects are stable whether or not the complement
+graph is included (and vice versa), confirming that the two spillover
+channels are approximately orthogonal in this dataset.
+This is expected given that substitute and complement relationships are
+built from entirely different co-purchase signals.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Synthetic Validation}
+
+To assess whether the DML estimator recovers known effects, we ran a
+semi-synthetic simulation study: we kept the real covariate and network
+structure but replaced the outcome with a data-generating process with
+known direct and spillover coefficients.
+We ran 50 independent simulations.
+Results are shown in Table~\ref{tab:synthetic}.
+
+\begin{table}[ht]
+    \centering
+    \caption{Semi-synthetic simulation study: bias, RMSE, and 95\% CI
+        coverage over 50 replications.}
+    \label{tab:synthetic}
+    \begin{tabular}{lcccc}
+        \toprule
+        Effect         & Mean bias  & RMSE      & Coverage & $n_{\mathrm{sims}}$ \\
+        \midrule
+        Direct         & $-0.00075$ & $0.00088$ & 0.54     & 50                  \\
+        Sub spillover  & $+0.00022$ & $0.00062$ & 0.92     & 50                  \\
+        Comp spillover & $-0.00096$ & $0.00119$ & 0.74     & 50                  \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\paragraph{Bias and RMSE.}
+All three effects have near-zero mean bias and small RMSE relative to the
+true effect sizes, indicating that the estimator recovers the right
+parameter values on average.
+
+\paragraph{CI coverage.}
+The substitute spillover achieves near-nominal coverage (92\%), consistent
+with well-calibrated inference.
+The complement spillover falls slightly short (74\%), likely due to the
+noisier signal in the complement graph.
+The direct effect has notably low coverage (54\%), meaning its 95\%
+confidence intervals are too narrow.
+This is a known issue with two-way cluster SEs when the primary treatment
+has high within-cluster correlation: \texttt{promo\_any} tends to be set
+at the product-week level, generating strong intra-product correlation that
+shrinks the effective sample size for the direct treatment more than the
+asymptotic approximation assumes.
+Confidence intervals for the direct effect should therefore be interpreted as
+approximate rather than fully calibrated.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Discussion}
+
+\paragraph{What graph structure adds.}
+The graph matters for causal estimation in two distinct ways.
+First, it defines the exposure mappings that make downstream substitute and
+complement effects estimable at all.
+Second, its embedding representation supplies dense product-level controls
+that improve adjustment for confounding.
+The ablation results indicate that the second channel is the largest
+empirical contributor in this dataset: Node2Vec coordinates act like
+approximate product fixed effects, while the precise calibration of edge
+weights matters less than the neighborhood topology itself.
+
+\paragraph{Why complement spillovers are weak.}
+The complement attachment effect is consistently positive but never
+statistically significant in the binary promotion model, though it does
+reach significance in the continuous discount model.
+This pattern suggests a substantive distinction between extensive-margin and
+intensive-margin promotion measures: binary promotions (display/mailer flags)
+are noisy indicators of price salience, while a deeper discount more directly
+captures the price shock that triggers basket expansion.
+Another possibility is that one-hop complement aggregation is too coarse
+to capture the full attachment signal, which may propagate through longer
+purchase paths.
+
+\paragraph{Limitations.}
+This study has several limitations worth noting:
+
+\begin{itemize}
+    \item \textbf{One-hop exposure only.} The exposure mapping in
+          Eq.~\eqref{eq:exposure} aggregates only immediate graph neighbors.
+          Multi-hop propagation is not captured.
+
+    \item \textbf{Static product graphs.} Both adjacency matrices are built
+          from the full transaction history, ignoring seasonal or assortment
+          shifts in product relationships.
+
+    \item \textbf{Observational data.} Despite the DML design, unmeasured
+          store-week confounders (local events, weather, competitor promotions)
+          could bias spillover estimates if they affect multiple products
+          simultaneously.
+          In particular, coordinated store-week promotions affecting multiple
+          related products could induce correlated treatment assignment and
+          outcomes not fully captured by observed controls.
+
+    \item \textbf{Direct effect CI undercoverage.} As noted in
+          Section~VIII, the 95\% CIs for the direct effect cover the true value
+          only 54\% of the time in simulation, suggesting that significance
+          claims for the direct ATE should be interpreted conservatively.
+
+    \item \textbf{Treatments estimated separately.} Binary \texttt{promo\_any}
+          and continuous \texttt{discount\_rate} are estimated in separate models.
+          Joint estimation of both treatment dimensions is left for future work.
+\end{itemize}
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+We presented a graph-aware Double Machine Learning framework for estimating
+causal spillovers in retail pricing.
+The key design choices are: (1) representing product relationships as a
+weighted graph built from transaction co-occurrence and embedding similarity;
+(2) computing one-hop weighted exposure variables to summarize neighborhood
+treatment intensity; and (3) embedding product coordinates in the covariate
+matrix as approximate product fixed effects.
+
+On the Dunnhumby retail panel, we estimate a positive direct promotion effect
+of $+0.037$ on the $\log(1 + \text{units sold})$ scale, a statistically
+significant negative substitute spillover, and a directional complement
+attachment effect that becomes significant under continuous discount depth.
+Importantly, the ablation study demonstrates that product embeddings are
+critical: without them, the direct effect rises by 16\% and the substitute
+spillover estimate more than doubles.
+More broadly, the results show that incorporating product-relationship
+structure improves estimation of downstream treatment effects in this retail
+setting by making spillovers explicit and by providing richer controls for
+product-level confounding.
+
+These results suggest that retailers should account for cross-product demand
+spillovers when evaluating promotional strategies, and that embedding-based
+product representations are a practical and effective way to control for
+product-level confounding in large-scale observational datasets.
+
+
+% ─────────────────────────────────────────────────────────────────────────────
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

@@ -44,6 +44,14 @@ def main():
     )
     train_panel = splits["train"]
 
+    # Apply log transform to match graph DML outcome scale
+    if cfg["dml"]["log_transform"]:
+        train_panel = train_panel.copy()
+        train_panel[cfg["outcome"]["primary"]] = np.log1p(
+            train_panel[cfg["outcome"]["primary"]]
+        )
+        print("Applied log(1+Y) transform to outcome variable")
+
     print(f"Training baselines on {len(train_panel):,} observations "
           f"(weeks {cfg['split']['train_weeks']})")
 

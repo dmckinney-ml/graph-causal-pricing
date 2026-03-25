@@ -1,5 +1,5 @@
 """
-Exposure mapping: compute weighted neighbourhood treatment exposure.
+Exposure mapping: compute weighted neighborhood treatment exposure.
 
 This is the core graph-aware component. Instead of pre-computing static
 spillover features (as in spillover_features.py), exposure is computed
@@ -30,7 +30,7 @@ def compute_weighted_exposure(
     prefix: str = "exposure",
 ) -> pd.DataFrame:
     """
-    Compute per-observation weighted neighbourhood treatment exposure.
+    Compute per-observation weighted neighborhood treatment exposure.
 
     Parameters
     ----------
@@ -45,7 +45,7 @@ def compute_weighted_exposure(
     -------
     panel (copy) with two new columns:
         {prefix}_weighted   — weighted exposure  (Σ w·T / Σ w)
-        {prefix}_sum        — sum of neighbour treatments weighted by edge weight
+        {prefix}_sum        — sum of neighbor treatments weighted by edge weight
     """
     panel = panel.copy()
 
@@ -86,20 +86,20 @@ def compute_weighted_exposure(
     present_sw = _sw_prod_matrix(ones, valid, col_idx, n_products)
 
     # Sparse matmul: numerator[sw, p] = Σ_q A[p,q] · T[sw,q]
-    #                denom[sw, p]     = Σ_q A[p,q] · 1[sw,q]  (present neighbours)
-    numerator_mat = (treat_sw @ A_csr.T).toarray()
-
-    # For denominator: weight sums for present neighbours
-    # present_sw marks which products have an observation in each store-week
-    denom_mat = (present_sw @ A_csr.T).toarray()
+    #                denom[sw, p]     = Σ_q A[p,q] · 1[sw,q]  (present neighbors)
+    # Keep sparse to avoid materialising a potentially large (n_sw × n_products) dense matrix
+    num_sparse = (treat_sw @ A_csr.T).tocsr()
+    den_sparse = (present_sw @ A_csr.T).tocsr()
 
     # Extract per-row values
     exposure_sum = np.zeros(len(panel), dtype=np.float32)
     exposure_weighted = np.zeros(len(panel), dtype=np.float32)
     denom_vals = np.zeros(len(panel), dtype=np.float32)
 
-    exposure_sum[valid] = numerator_mat[sw_codes[valid], col_idx[valid]]
-    denom_vals[valid] = denom_mat[sw_codes[valid], col_idx[valid]]
+    rows_v = sw_codes[valid]
+    cols_v = col_idx[valid]
+    exposure_sum[valid] = np.asarray(num_sparse[rows_v, cols_v]).ravel()
+    denom_vals[valid] = np.asarray(den_sparse[rows_v, cols_v]).ravel()
 
     safe_denom = np.where(denom_vals > 0, denom_vals, 1.0)
     exposure_weighted = exposure_sum / safe_denom

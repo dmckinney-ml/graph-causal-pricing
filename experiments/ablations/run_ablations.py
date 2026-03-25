@@ -1,5 +1,5 @@
 """
-Ablation experiments to quantify the contribution of each modelling choice.
+Ablation experiments to quantify the contribution of each modeling choice.
 
 Ablations:
     1. No graph features at all       (≈ dml_no_graph baseline)
@@ -52,6 +52,12 @@ def main():
         test_weeks=tuple(cfg["split"]["test_weeks"]),
     )
     train = splits["train"]
+
+    max_rows = 6_000_000
+    if len(train) > max_rows:
+        train = train.sample(n=max_rows, random_state=seed)
+        print(f"Subsampled to {max_rows:,} rows (from {len(splits['train']):,})")
+
     n_folds = cfg["dml"]["n_folds"]
     cl = cfg["dml"]["confidence_level"]
 

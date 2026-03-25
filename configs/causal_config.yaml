@@ -61,7 +61,7 @@ exposure:
   weight_types:
     - binary                  # unweighted: Σ T_j / |N(i)|
     - edge_weight             # weighted: Σ w_ij T_j / Σ w_ij
-  neighbourhood_depth: 1      # 1-hop (2-hop as robustness test)
+  neighborhood_depth: 1      # 1-hop (2-hop as robustness test)
 
 # ── Double ML ────────────────────────────────────────────────────────────────
 dml:
@@ -97,7 +97,7 @@ synthetic:
 # ── Robustness ───────────────────────────────────────────────────────────────
 robustness:
   min_cooccurrence_sweep: [5, 10, 20, 50]
-  neighbourhood_depths: [1, 2]
+  neighborhood_depths: [1, 2]
   split_shift_weeks: [-10, 0, 10]
   top_departments: 5          # run per-department subsets
 
