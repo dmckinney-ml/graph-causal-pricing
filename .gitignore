@@ -88,3 +88,5 @@ paper/*.dvi
 paper/*.synctex.gz
 paper/*.synctex.gz(busy)
 paper/_minted*/
+paper_siam/
+siamproceedingsmacros_022425/
